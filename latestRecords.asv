@@ -1,0 +1,14 @@
+% Initialize a cell array to store the last row for each patient's snapshots
+lastRows = cell(1, length(patients));
+
+% Loop through each patient in the patients array
+for i = 1:length(patients)
+    % Get all the snapshots for the current patient
+    snapshots = patients(i).snapshots;
+    
+    % Store the last row (all columns) of the snapshots array for the current patient
+    lastRows{i} = snapshots(end);
+end
+
+% Display the last row for each patient
+lastRows
