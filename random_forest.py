@@ -1,6 +1,9 @@
 #!/usr/bin/env python
 # coding: utf-8
 
+# In[ ]:
+
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -9,6 +12,9 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split, RandomizedSearchCV
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, roc_auc_score, roc_curve
 from sklearn.preprocessing import StandardScaler, LabelEncoder
+
+
+# In[32]:
 
 
 # Load data
@@ -23,16 +29,76 @@ columns_to_exclude = ['patid', 'patkey', 'rhcId','RHCDate', 'TTEDate', 'AVr_str'
 data = data.drop(columns=columns_to_exclude)
 
 
+# In[ ]:
+
+
+def calculate_cardiac_indices(df):
+    """
+    Calculate cardiac indices based on available variables
+    
+    Parameters:
+    df (pandas.DataFrame): Input dataframe with RHC and TTE variables
+    
+    Returns:
+    pandas.DataFrame: Dataframe with additional cardiac indices columns
+    """
+    # Calculate mean blood pressure (assuming using non-invasive or systemic arterial measurements)
+    df['mean_BP'] = (df['NIBPs_vitals'] + 2 * df['NIBPd_vitals']) / 3
+    
+    # Estimate Body Surface Area (BSA) using Mosteller formula
+    # Requires Height in cm and Weight in kg
+    df['BSA'] = np.sqrt((df['Height'] * df['Weight']) / 3600)
+    
+    # 1. Left Ventricle Stroke Work Index (LVSWI)
+    # Using mean blood pressure and PCW as LAP approximation
+    df['LVSWI'] = (df['mean_BP'] - df['PCW']) * 0.0136 / df['BSA']
+    
+    # 2. Right Ventricle Stroke Work Index (RVSWI)
+    # Using Right Atrial Mean Pressure (RAm) and PCW
+    df['RVSWI'] = (df['RAm'] - df['PCW']) * 0.0136 / df['BSA']
+    
+    # 3. LV Stiffness 
+    # Using available LV diameter measurements
+    # Note: This is an approximation and might need clinical validation
+    df['LV_stiffness'] = (df['PCW'] * (df['LVIDd'] / 2)) / ((df['LVIDs'] - df['LVIDd']) / df['LVIDd'])
+    
+    # 4. Passive Cardiac Index
+    # Using Cardiac Output and PCW
+    df['Passive_Cardiac_Index'] = df['CO_td'] / (df['PCW'] * df['BSA'])
+    
+    return df
+data = calculate_cardiac_indices(data)
+
+
+# In[33]:
+
+
 missing_percentages = data.isnull().mean() * 100
 
 # Identify columns with more than 20% missing data
 columns_to_drop = missing_percentages[missing_percentages > 20].index
 
 # Drop these columns from the dataset
-data_cleaned = data.drop(columns=columns_to_drop)
+data = data.drop(columns=columns_to_drop)
 
 # Display the columns dropped
 print(f"Columns dropped: {columns_to_drop.tolist()}")
+
+
+# In[34]:
+
+
+#drop patients where more than 20% missing
+missing_percentage = data.isnull().mean(axis=1)
+
+# Keep only the rows where missing percentage is <= 0.2 (20%)
+df_cleaned = data[missing_percentage <= 0.2]
+
+# Reset index if desired
+data = df_cleaned.reset_index(drop=True)
+
+
+# In[35]:
 
 
 # Convert 'Birthday' to Age
@@ -47,6 +113,9 @@ data = data.drop(columns=['Birthday'], errors='ignore')
 
 # Select numerical features for X
 X = data.select_dtypes(include=[np.number]).drop(columns=['RV Dysfunction'], errors='ignore')
+
+
+# In[36]:
 
 
 from sklearn.impute import KNNImputer
@@ -68,6 +137,9 @@ scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X)
 
 
+# In[37]:
+
+
 # Encode target variable into binary labels
 Y = data['RV Dysfunction'].replace({
     'Moderate': 'High Dysfunction',
@@ -87,8 +159,14 @@ X_scaled = scaler.fit_transform(X)
 X_train, X_test, y_train, y_test = train_test_split(X_scaled, Y_encoded, test_size=0.2, random_state=42)
 
 
+# In[38]:
+
+
 print("Class distribution:", np.bincount(y_train))
 print("Classes",np.unique(Y) )
+
+
+# In[39]:
 
 
 def train_and_evaluate(model, model_name, X_train, Y_train, X_test, Y_test):
@@ -138,6 +216,10 @@ def train_and_evaluate(model, model_name, X_train, Y_train, X_test, Y_test):
         plt.show()
     
     return model
+
+
+# In[40]:
+
 
 def tune_hyperparameters(X_train, y_train, n_iter=20, cv=5, random_state=42):
     """
@@ -191,9 +273,15 @@ def tune_hyperparameters(X_train, y_train, n_iter=20, cv=5, random_state=42):
     return best_model, best_params
 
 
+# In[41]:
+
+
 # Train and evaluate the default Random Forest model
 default_model = RandomForestClassifier(random_state=42)
 default_model = train_and_evaluate(default_model, "Default Random Forest", X_train, y_train, X_test, y_test)
+
+
+# In[45]:
 
 
 # Tune hyperparameters for the Random Forest model
@@ -205,8 +293,14 @@ for param, value in best_params.items():
     print(f"{param}: {value}")
 
 
+# In[46]:
+
+
 # Train and evaluate the Random Forest model with tuned hyperparameters
 tuned_model = train_and_evaluate(best_model, "Tuned Random Forest", X_train, y_train, X_test, y_test)
+
+
+# In[47]:
 
 
 def plot_feature_importance(model, feature_names, title="Feature Importance", top_n=20, top_n_true=False):
@@ -245,6 +339,10 @@ def plot_feature_importance(model, feature_names, title="Feature Importance", to
     return feature_importance_df
 
 
+
+# In[48]:
+
+
 print("\nFeature Importance for Default Random Forest:")
 importance_df_default = plot_feature_importance(default_model, X.columns, "Default Random Forest Feature Importance", False)
 
@@ -253,10 +351,19 @@ print("\nFeature Importance for Tuned Random Forest:")
 importance_df_tuned = plot_feature_importance(best_model, X.columns, "Tuned Random Forest Feature Importance", False) 
 
 
+# In[49]:
+
+
 print("\nFeature Importance for Default Random Forest:")
 importance_df_default = plot_feature_importance(default_model, X.columns, "Default Random Forest Top 20 Feature Importance", 20, True)
 
 # After training the tuned model
 print("\nFeature Importance for Tuned Random Forest:")
 importance_df_tuned = plot_feature_importance(best_model, X.columns, "Tuned Random Forest Top 20 Feature Importance",20, True) 
+
+
+# In[ ]:
+
+
+
 
