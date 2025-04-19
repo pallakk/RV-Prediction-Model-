@@ -1,20 +1,22 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[ ]:
+# In[79]:
 
 
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split, RandomizedSearchCV
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, roc_auc_score, roc_curve
 from sklearn.preprocessing import StandardScaler, LabelEncoder
+import pandas as pd
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.feature_selection import SelectFromModel
 
 
-# In[32]:
+# In[ ]:
 
 
 # Load data
@@ -34,7 +36,7 @@ data = data.drop(columns=columns_to_exclude)
 
 def calculate_cardiac_indices(df):
     """
-    Calculate cardiac indices based on available variables
+    Calculate cardiac indices based on available variables according to the provided formula sheet
     
     Parameters:
     df (pandas.DataFrame): Input dataframe with RHC and TTE variables
@@ -42,35 +44,48 @@ def calculate_cardiac_indices(df):
     Returns:
     pandas.DataFrame: Dataframe with additional cardiac indices columns
     """
-    # Calculate mean blood pressure (assuming using non-invasive or systemic arterial measurements)
-    df['mean_BP'] = (df['NIBPs_vitals'] + 2 * df['NIBPd_vitals']) / 3
+    # Calculate mean blood pressure using proper formula from image
+    # Formula shows: mean_BP = 2/3(AD) + 1/3(AS) or 2/3(NIBPd) + 1/3(NIBPs)
+    df['mean_BP'] = (2/3 * df['NIBPd_vitals']) + (1/3 * df['NIBPs_vitals'])
     
-    # Estimate Body Surface Area (BSA) using Mosteller formula
-    # Requires Height in cm and Weight in kg
-    df['BSA'] = np.sqrt((df['Height'] * df['Weight']) / 3600)
+    # Estimate Body Surface Area (BSA) using DuBois formula as shown in image
+    # BSA = 0.007184 * (weight)^0.425 * (height)^0.725
+    df['BSA'] = 0.007184 * (df['Weight'] ** 0.425) * (df['Height'] ** 0.725)
+    
+    # LVEDV calculation with pi
+    df['LVEDV'] = (4/3) * np.pi * (df['LVIDd']/2)**3
+    
+    # Calculate Left Ventricle Stroke Volume
+    df['LVSV'] = df['LVEDV'] * df['LVEF_tte'] / 100
     
     # 1. Left Ventricle Stroke Work Index (LVSWI)
-    # Using mean blood pressure and PCW as LAP approximation
-    df['LVSWI'] = (df['mean_BP'] - df['PCW']) * 0.0136 / df['BSA']
+    # LVSWI = LVSV * (mean_BP - LAP) * 0.0136 / BSA, where LAP = PCW
+    df['LVSWI'] = df['LVSV'] * (df['mean_BP'] - df['PCW']) * 0.0136 / df['BSA']
     
     # 2. Right Ventricle Stroke Work Index (RVSWI)
-    # Using Right Atrial Mean Pressure (RAm) and PCW
-    df['RVSWI'] = (df['RAm'] - df['PCW']) * 0.0136 / df['BSA']
+    # RVSWI = RVSV * (mPAP - mRAP) * 0.0136 / BSA
+    # Where RVSV = LVSV, mPAP = 2/3(PAd) + 1/3(PAs), mRAP = RAm
+    # Using LVSV for RVSV as specified
+    df['RVSWI'] = df['LVSV'] * (df['PAm'] - df['RAm']) * 0.0136 / df['BSA']
     
-    # 3. LV Stiffness 
-    # Using available LV diameter measurements
-    # Note: This is an approximation and might need clinical validation
-    df['LV_stiffness'] = (df['PCW'] * (df['LVIDd'] / 2)) / ((df['LVIDs'] - df['LVIDd']) / df['LVIDd'])
+    # 3. LV Stiffness = σ/ε
+    # σ = PCW * (LVIDd/2) / (2 * IVSD)
+    df['stress'] = df['PCW'] * (df['LVIDd']/2) / (2 * df['IVSd'])
     
-    # 4. Passive Cardiac Index
-    # Using Cardiac Output and PCW
-    df['Passive_Cardiac_Index'] = df['CO_td'] / (df['PCW'] * df['BSA'])
+    # ε = (LVIDd - LVIDs) / LVIDs
+    df['strain'] = (df['LVIDd'] - df['LVIDs']) / df['LVIDs']
+    
+    # LV Stiffness = stress / strain
+    df['LV_stiffness'] = df['stress'] / df['strain']
+    
+    # 4. Passive Cardiac Index = RAP * CO / (LVEDP * BSA)
+    # Where LVEDP = PCW
+    df['Passive_Cardiac_Index'] = df['RAm'] * df['CO_fick'] / (df['PCW'] * df['BSA'])
     
     return df
-data = calculate_cardiac_indices(data)
 
 
-# In[33]:
+# In[ ]:
 
 
 missing_percentages = data.isnull().mean() * 100
@@ -85,7 +100,7 @@ data = data.drop(columns=columns_to_drop)
 print(f"Columns dropped: {columns_to_drop.tolist()}")
 
 
-# In[34]:
+# In[ ]:
 
 
 #drop patients where more than 20% missing
@@ -98,7 +113,7 @@ df_cleaned = data[missing_percentage <= 0.2]
 data = df_cleaned.reset_index(drop=True)
 
 
-# In[35]:
+# In[ ]:
 
 
 # Convert 'Birthday' to Age
@@ -115,12 +130,14 @@ data = data.drop(columns=['Birthday'], errors='ignore')
 X = data.select_dtypes(include=[np.number]).drop(columns=['RV Dysfunction'], errors='ignore')
 
 
-# In[36]:
+# In[ ]:
 
 
 from sklearn.impute import KNNImputer
 # Initialize the KNN imputer
 # You can adjust n_neighbors as needed
+X = X.replace([np.inf, -np.inf], np.nan)
+
 knn_imputer = KNNImputer(n_neighbors=5)
 
 # Get the feature names for later use
@@ -137,7 +154,7 @@ scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X)
 
 
-# In[37]:
+# In[ ]:
 
 
 # Encode target variable into binary labels
@@ -159,14 +176,14 @@ X_scaled = scaler.fit_transform(X)
 X_train, X_test, y_train, y_test = train_test_split(X_scaled, Y_encoded, test_size=0.2, random_state=42)
 
 
-# In[38]:
+# In[ ]:
 
 
 print("Class distribution:", np.bincount(y_train))
 print("Classes",np.unique(Y) )
 
 
-# In[39]:
+# In[ ]:
 
 
 def train_and_evaluate(model, model_name, X_train, Y_train, X_test, Y_test):
@@ -218,7 +235,7 @@ def train_and_evaluate(model, model_name, X_train, Y_train, X_test, Y_test):
     return model
 
 
-# In[40]:
+# In[ ]:
 
 
 def tune_hyperparameters(X_train, y_train, n_iter=20, cv=5, random_state=42):
@@ -273,19 +290,46 @@ def tune_hyperparameters(X_train, y_train, n_iter=20, cv=5, random_state=42):
     return best_model, best_params
 
 
-# In[41]:
+# In[ ]:
 
 
-# Train and evaluate the default Random Forest model
-default_model = RandomForestClassifier(random_state=42)
-default_model = train_and_evaluate(default_model, "Default Random Forest", X_train, y_train, X_test, y_test)
 
 
-# In[45]:
+
+# In[81]:
+
+
+# Train a Random Forest model to get feature importances
+initial_rf = RandomForestClassifier(random_state=42)
+initial_rf.fit(X_train, y_train)
+
+# Use SelectFromModel to select features based on the mean importance
+selector = SelectFromModel(initial_rf, threshold="mean", prefit=True)
+
+# Transform the training and testing datasets based on the selected features
+X_train_selected = selector.transform(X_train)
+X_test_selected = selector.transform(X_test)
+
+# Get the selected feature names using get_support() instead
+selected_indices = selector.get_support()
+selected_features = [feature_names[i] for i in range(len(feature_names)) if selected_indices[i]]
+
+# Print the selected feature names
+print("Selected Features:", selected_features)
+
+
+# In[ ]:
+
+
+rf_selected = RandomForestClassifier(random_state=42)
+default_model = train_and_evaluate(rf_selected, "Random Forest with Feature Selection", X_train_selected, y_train, X_test_selected, y_test)
+
+
+# In[ ]:
 
 
 # Tune hyperparameters for the Random Forest model
-best_model, best_params = tune_hyperparameters(X_train, y_train)
+best_model, best_params = tune_hyperparameters(X_train_selected, y_train)
 
 # Print the best hyperparameters
 print("Best Hyperparameters:")
@@ -293,14 +337,23 @@ for param, value in best_params.items():
     print(f"{param}: {value}")
 
 
-# In[46]:
+# In[ ]:
 
 
 # Train and evaluate the Random Forest model with tuned hyperparameters
-tuned_model = train_and_evaluate(best_model, "Tuned Random Forest", X_train, y_train, X_test, y_test)
+tuned_model = train_and_evaluate(best_model, "Tuned Random Forest", X_train_selected, y_train, X_test_selected, y_test)
 
 
-# In[47]:
+# In[ ]:
+
+
+selected_feature_names = [feature_names[i] for i in selected_features]
+
+# Print the selected feature names
+print("Selected Feature Names:", selected_feature_names)
+
+
+# In[ ]:
 
 
 def plot_feature_importance(model, feature_names, title="Feature Importance", top_n=20, top_n_true=False):
@@ -315,51 +368,53 @@ def plot_feature_importance(model, feature_names, title="Feature Importance", to
     """
     # Get feature importance from the model
     importances = model.feature_importances_
-    print(max(importances))
+    
     # Create a DataFrame for better visualization
     feature_importance_df = pd.DataFrame({
         'Feature': feature_names,
         'Importance': importances
     }).sort_values('Importance', ascending=False)
     
-    
-    plot_df = feature_importance_df
+    # If displaying top_n features, limit the DataFrame to the top_n features
     if top_n_true:
-        plot_df = feature_importance_df.head(top_n)
+        feature_importance_df = feature_importance_df.head(top_n)
     
     # Create the plot
     plt.figure(figsize=(12, 8))
-    sns.barplot(x='Importance', y='Feature', data=plot_df)
+    sns.barplot(x='Importance', y='Feature', data=feature_importance_df)
     plt.title(title)
     plt.xlabel('Importance Score')
     plt.ylabel('Features')
+    
+    # Rotate the y-axis labels for better readability
+    plt.yticks(rotation=0)  # Set rotation to 0 or adjust as needed
+    
     plt.tight_layout()
     plt.show()
     
     return feature_importance_df
 
 
-
-# In[48]:
-
-
-print("\nFeature Importance for Default Random Forest:")
-importance_df_default = plot_feature_importance(default_model, X.columns, "Default Random Forest Feature Importance", False)
-
-# After training the tuned model
-print("\nFeature Importance for Tuned Random Forest:")
-importance_df_tuned = plot_feature_importance(best_model, X.columns, "Tuned Random Forest Feature Importance", False) 
-
-
-# In[49]:
+# In[ ]:
 
 
 print("\nFeature Importance for Default Random Forest:")
-importance_df_default = plot_feature_importance(default_model, X.columns, "Default Random Forest Top 20 Feature Importance", 20, True)
+importance_df_default = plot_feature_importance(default_model, selected_features, "Default Random Forest Feature Importance", False)
 
 # After training the tuned model
 print("\nFeature Importance for Tuned Random Forest:")
-importance_df_tuned = plot_feature_importance(best_model, X.columns, "Tuned Random Forest Top 20 Feature Importance",20, True) 
+importance_df_tuned = plot_feature_importance(best_model, selected_features, "Tuned Random Forest Feature Importance", False) 
+
+
+# In[ ]:
+
+
+print("\nFeature Importance for Default Random Forest:")
+importance_df_default = plot_feature_importance(default_model, selected_features, "Default Random Forest Top 20 Feature Importance", 20, True)
+
+# After training the tuned model
+print("\nFeature Importance for Tuned Random Forest:")
+importance_df_tuned = plot_feature_importance(best_model, selected_features, "Tuned Random Forest Top 20 Feature Importance",20, True) 
 
 
 # In[ ]:
