@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[1]:
+# In[294]:
 
 
 import pandas as pd
@@ -17,7 +17,7 @@ from sklearn.feature_selection import SelectFromModel
 import pandas as pd
 
 
-# In[2]:
+# In[295]:
 
 
 # Load data
@@ -32,7 +32,7 @@ columns_to_exclude = ['patid', 'patkey', 'TTEDate', 'AVr_str', 'PVr_str', 'TVr_s
 '''
 
 
-# In[3]:
+# In[296]:
 
 
 import numpy as np
@@ -40,49 +40,79 @@ import pandas as pd
 
 def calculate_cardiac_indices(df):
     """
-    Calculate cardiac indices based on available variables according to the provided formula sheet.
-    
-    Parameters:
-    df (pandas.DataFrame): Input dataframe with RHC and TTE variables
-    
-    Returns:
-    pandas.DataFrame: Dataframe with additional cardiac indices columns
+    Calculate cardiac indices based on available variables for either clinical or computational datasets.
     """
-    # Convert LVIDd from mm to mL (assuming LVIDd is in mm, convert to cm, then use volume formula)
-    df['LVIDd_cm'] = df['LVIDd'] / 10  # Convert mm to cm
-    df['LVEDV'] = (4/3) * np.pi * (df['LVIDd_cm']/2) ** 3  # Volume calculation
 
-    # Convert LVEF from percentage to fraction
-    df['LVEF_tte'] = df['LVEF_tte'] * 0.01  
+    # Try to find LVIDd column
+    if 'LVIDd' in df.columns:
+        LVIDd_col = 'LVIDd'
+        LVIDs_col = 'LVIDs'
+        LVEF_col = 'LVEF_tte'
+        NIBPd_col = 'NIBPd_vitals'
+        NIBPs_col = 'NIBPs_vitals'
+        PCW_col = 'PCW'
+        RAm_col = 'RAm'
+        CO_col = 'CO_fick'
+        PAs_col = 'PAs'
+        PAd_col = 'PAd'
+        IVSd_col = 'IVSd'
+        Height_col = 'Height'
+        Weight_col = 'Weight'
+    else:
+        # Assume computational dataset uses _S suffix
+        LVIDd_col = 'LVIDd_S'
+        LVIDs_col = 'LVIDs_S'
+        LVEF_col = 'EF_S'
+        NIBPd_col = 'DBP_S'
+        NIBPs_col = 'SBP_S'
+        PCW_col = 'PCWP_S'
+        RAm_col = 'RAPmean_S'
+        CO_col = 'CO_S'
+        PAs_col = 'PASP_S'
+        PAd_col = 'PADP_S'
+        IVSd_col = 'IVSd_S' if 'IVSd_S' in df.columns else LVIDs_col  # fallback
+        Height_col = 'Height' if 'Height' in df.columns else None
+        Weight_col = 'Weight' if 'Weight' in df.columns else None
 
-    # Calculate Left Ventricle Stroke Volume
-    df['LVSV'] = df['LVEDV'] * df['LVEF_tte']
+    # Calculate LVIDd in cm and LVEDV
+    df['LVIDd_cm'] = df[LVIDd_col] / 10
+    df['LVEDV'] = (4 / 3) * np.pi * (df['LVIDd_cm'] / 2) ** 3
 
-    # Mean Blood Pressure calculation
-    df['mean_BP'] = (2/3 * df['NIBPd_vitals']) + (1/3 * df['NIBPs_vitals'])
+    # LVEF as fraction
+    df['LVEF_frac'] = df[LVEF_col] * 0.01
 
-    # Estimate Body Surface Area (BSA) using DuBois formula
-    df['BSA'] = 0.007184 * (df['Weight'] ** 0.425) * (df['Height'] ** 0.725)
+    # Stroke Volume
+    df['LVSV'] = df['LVEDV'] * df['LVEF_frac']
 
-    # Left Ventricle Stroke Work Index (LVSWI)
-    df['LVSWI'] = df['LVSV'] * (df['mean_BP'] - df['PCW']) * 0.0136 / df['BSA']
+    # Mean BP
+    df['mean_BP'] = (2 / 3 * df[NIBPd_col]) + (1 / 3 * df[NIBPs_col])
 
-    # Right Ventricle Stroke Work Index (RVSWI)
-    df['PAm'] = (df['PAs'] + 2 * df['PAd']) / 3
-    df['RVSWI'] = df['LVSV'] * (df['PAm'] - df['RAm']) * 0.0136 / df['BSA']
+    # BSA
+    if Height_col and Weight_col:
+        df['BSA'] = 0.007184 * (df[Weight_col] ** 0.425) * (df[Height_col] ** 0.725)
+    else:
+        df['BSA'] = 1.8  # default average if not provided
 
-    # LV Stiffness = stress / strain
-    df['stress'] = df['PCW'] * (df['LVIDd_cm']/2) / (2 * df['IVSd'])
-    df['strain'] = (df['LVIDd_cm'] - df['LVIDs']) / df['LVIDs']
+    # LVSWI
+    df['LVSWI'] = df['LVSV'] * (df['mean_BP'] - df[PCW_col]) * 0.0136 / df['BSA']
+
+    # RVSWI
+    df['PAm'] = (df[PAs_col] + 2 * df[PAd_col]) / 3
+    df['RVSWI_calc'] = df['LVSV'] * (df['PAm'] - df[RAm_col]) * 0.0136 / df['BSA']
+
+    # LV stiffness
+    df['stress'] = df[PCW_col] * (df['LVIDd_cm'] / 2) / (2 * df[IVSd_col])
+    df['strain'] = (df['LVIDd_cm'] - df[LVIDs_col]) / df[LVIDs_col]
     df['LV_stiffness'] = df['stress'] / df['strain']
 
-    # Passive Cardiac Index = RAP * CO / (LVEDP * BSA), where LVEDP = PCW
-    df['Passive_Cardiac_Index'] = df['RAm'] * df['CO_fick'] / (df['PCW'] * df['BSA'])
+    # Passive CI
+    df['Passive_Cardiac_Index'] = df[RAm_col] * df[CO_col] / (df[PCW_col] * df['BSA'])
 
     return df
 
 
-# In[4]:
+
+# In[297]:
 
 
 missing_percentages = data.isnull().mean() * 100
@@ -98,7 +128,7 @@ data = data.drop(columns=columns_to_drop)
 print(f"Columns dropped: {columns_to_drop.tolist()}")
 
 
-# In[5]:
+# In[298]:
 
 
 #drop patients where more than 20% missing
@@ -111,7 +141,7 @@ df_cleaned = data[missing_percentage <= 0.2]
 data = df_cleaned.reset_index(drop=True)
 
 
-# In[6]:
+# In[299]:
 
 
 # Convert 'Birthday' to Age
@@ -129,7 +159,7 @@ X = data.select_dtypes(include=[np.number]).drop(columns=['RV Dysfunction'], err
 print(X.head())
 
 
-# In[7]:
+# In[300]:
 
 
 # Pretty display all numerical features (first 5 rows)
@@ -142,7 +172,7 @@ X.head().style.set_caption("All Engineered Features (Sample)")\
     ])
 
 
-# In[8]:
+# In[301]:
 
 
 from sklearn.impute import KNNImputer
@@ -166,7 +196,7 @@ scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X)
 
 
-# In[9]:
+# In[302]:
 
 
 # Encode target variable into binary labels
@@ -188,14 +218,14 @@ X_scaled = scaler.fit_transform(X)
 X_train, X_test, y_train, y_test = train_test_split(X_scaled, Y_encoded, test_size=0.2, random_state=42)
 
 
-# In[10]:
+# In[303]:
 
 
 print("Class distribution:", np.bincount(y_train))
 print("Classes",np.unique(Y) )
 
 
-# In[11]:
+# In[304]:
 
 
 import pandas as pd
@@ -240,7 +270,7 @@ def train_and_evaluate(model, model_name, X_train, Y_train, X_test, Y_test):
     cm_df = pd.DataFrame(cm, index=["Actual 0", "Actual 1"], columns=["Predicted 0", "Predicted 1"])
     
     plt.figure(figsize=(6, 5))
-    sns.heatmap(cm_df, annot=True, fmt='d', cmap='YlGnBu', linewidths=0.5)
+    sns.heatmap(cm_df, annot=True, fmt='d', cmap='plasma', linewidths=0.5)
     plt.title(f"Confusion Matrix - {model_name}")
     plt.ylabel('Actual')
     plt.xlabel('Predicted')
@@ -266,7 +296,7 @@ def train_and_evaluate(model, model_name, X_train, Y_train, X_test, Y_test):
     return model
 
 
-# In[12]:
+# In[305]:
 
 
 def tune_hyperparameters_with_feature_selection(X_train, y_train, selected_features, n_iter=20, cv=5, random_state=42):
@@ -323,10 +353,10 @@ def tune_hyperparameters_with_feature_selection(X_train, y_train, selected_featu
     return best_model, best_params
 
 
-# In[13]:
+# In[306]:
 
 
-# Train a Random Forest model to get feature importances
+'''# Train a Random Forest model to get feature importances
 initial_rf = RandomForestClassifier(random_state=42)
 initial_rf.fit(X_train, y_train)
 
@@ -342,39 +372,39 @@ selected_indices = selector.get_support()
 selected_features = [feature_names[i] for i in range(len(feature_names)) if selected_indices[i]]
 
 # Print the actual selected feature names
-print("Selected Features:", selected_features)
+print("Selected Features:", selected_features)'''
 
 
-# In[14]:
+# In[307]:
 
 
-rf_selected = RandomForestClassifier(random_state=42)
+'''rf_selected = RandomForestClassifier(random_state=42)
 default_model = train_and_evaluate(rf_selected, "Random Forest with Feature Selection", 
-                                  X_train_selected, y_train, X_test_selected, y_test)
+                                  X_train_selected, y_train, X_test_selected, y_test)'''
 
 
-# In[15]:
+# In[308]:
 
 
-# Tune hyperparameters on the selected features
+'''# Tune hyperparameters on the selected features
 best_model, best_params = tune_hyperparameters_with_feature_selection(
     X_train_selected, y_train, selected_features)
 
 # Print the best hyperparameters
 print("Best Hyperparameters:")
 for param, value in best_params.items():
-    print(f"{param}: {value}")
+    print(f"{param}: {value}")'''
 
 
-# In[16]:
+# In[309]:
 
 
 # Train and evaluate the Random Forest model with tuned hyperparameters on selected features
-tuned_model = train_and_evaluate(best_model, "Tuned Random Forest with Feature Selection", 
-                               X_train_selected, y_train, X_test_selected, y_test)
+'''tuned_model = train_and_evaluate(best_model, "Tuned Random Forest with Feature Selection", 
+                               X_train_selected, y_train, X_test_selected, y_test)'''
 
 
-# In[17]:
+# In[310]:
 
 
 def plot_feature_importance(model, feature_names, title="Feature Importance", top_n=20, top_n_true=False):
@@ -403,7 +433,8 @@ def plot_feature_importance(model, feature_names, title="Feature Importance", to
     
     # Create the plot
     plt.figure(figsize=(12, 8))
-    sns.barplot(x='Importance', y='Feature', data=feature_importance_df)
+    sns.barplot(x='Importance', y='Feature', data=feature_importance_df, palette="plasma")
+
     plt.title(title)
     plt.xlabel('Importance Score')
     plt.ylabel('Features')
@@ -417,10 +448,10 @@ def plot_feature_importance(model, feature_names, title="Feature Importance", to
     return feature_importance_df
 
 
-# In[18]:
+# In[311]:
 
 
-# Plot feature importance for both models
+'''# Plot feature importance for both models
 print("\nFeature Importance for Default Random Forest:")
 importance_df_default = plot_feature_importance(default_model, selected_features, 
                                               "Default Random Forest Feature Importance")
@@ -435,11 +466,80 @@ importance_df_default = plot_feature_importance(default_model, selected_features
                                              "Default Random Forest Top 10 Feature Importance", 10, True)
 print("\nFeature Importance for Tuned Random Forest (Top 10):")
 importance_df_tuned = plot_feature_importance(tuned_model, selected_features, 
-                                           "Tuned Random Forest Top 10 Feature Importance", 10, True)
+                                           "Tuned Random Forest Top 10 Feature Importance", 10, True)'''
 
 
-# In[ ]:
+# In[312]:
 
 
+def get_roc_data(model, X_train, y_train, X_test, y_test):
+    model.fit(X_train, y_train)
+    y_proba = model.predict_proba(X_test)[:, 1]
+    fpr, tpr, _ = roc_curve(y_test, y_proba)
+    auc = roc_auc_score(y_test, y_proba)
+    return fpr, tpr, auc
 
+
+# In[313]:
+
+
+def run_rf_pipeline(csv_file, label=''):
+    print(f"\n========== Running Random Forest Model on: {label} ==========\n")
+    data = pd.read_csv(csv_file)
+
+    data = data.dropna(subset=['RV Dysfunction'])
+    data = data[data['RV Dysfunction'] != '0']
+
+    if 'Birthday' in data.columns:
+        data['Birthday'] = pd.to_datetime(data['Birthday'], format="%d-%b-%y", errors='coerce')
+        data = data.dropna(subset=['Birthday'])
+        today = pd.to_datetime('today')
+        data['Age'] = (today - data['Birthday']).dt.days / 365.25
+        data = data.drop(columns=['Birthday'], errors='ignore')
+
+    data = calculate_cardiac_indices(data)
+
+    missing_percentages = data.isnull().mean() * 100
+    columns_to_drop = missing_percentages[missing_percentages > 20].index
+    data = data.drop(columns=columns_to_drop)
+
+    missing_percentage = data.isnull().mean(axis=1)
+    data = data[missing_percentage <= 0.2].reset_index(drop=True)
+
+    X = data.select_dtypes(include=[np.number]).drop(columns=['RV Dysfunction'], errors='ignore')
+    X = X.replace([np.inf, -np.inf], np.nan)
+
+    knn_imputer = KNNImputer(n_neighbors=5)
+    X = pd.DataFrame(knn_imputer.fit_transform(X), columns=X.columns)
+
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+
+    Y = data['RV Dysfunction'].replace({
+        'Moderate': 'High Dysfunction',
+        'Severe': 'High Dysfunction',
+        'Normal': 'Low Dysfunction',
+        'Mild': 'Low Dysfunction'
+    })
+
+    label_encoder = LabelEncoder()
+    Y_encoded = label_encoder.fit_transform(Y)
+
+    X_train, X_test, y_train, y_test = train_test_split(X_scaled, Y_encoded, test_size=0.2, random_state=42)
+
+    rf_model = RandomForestClassifier(random_state=42)
+    trained_model = train_and_evaluate(rf_model, f"{label} - Random Forest", X_train, y_train, X_test, y_test)
+
+    fpr, tpr, auc = get_roc_data(rf_model, X_train, y_train, X_test, y_test)
+    return label, fpr, tpr, auc
+
+
+# In[314]:
+
+
+rf_results = [
+    run_rf_pipeline("Close2AdmitDataWithRV.csv", "Patient"),
+    run_rf_pipeline("Close2AdmitDTinfo.csv", "Computational"),
+    run_rf_pipeline("CombinedDataWithRV.csv", "Combined")
+]
 
