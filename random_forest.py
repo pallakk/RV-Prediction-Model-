@@ -480,11 +480,62 @@ def get_roc_data(model, X_train, y_train, X_test, y_test):
     return fpr, tpr, auc
 
 
-# In[313]:
+# In[319]:
 
+
+def get_roc_data(model, X_train, y_train, X_test, y_test):
+    model.fit(X_train, y_train)
+    y_proba = model.predict_proba(X_test)[:, 1]
+    fpr, tpr, _ = roc_curve(y_test, y_proba)
+    auc = roc_auc_score(y_test, y_proba)
+    return fpr, tpr, auc
+
+def tune_rf(X_train, y_train):
+    param_dist = {
+        'n_estimators': [100, 200, 300],
+        'max_depth': [None, 10, 20, 30],
+        'min_samples_split': [2, 5, 10],
+        'min_samples_leaf': [1, 2, 4],
+        'max_features': ['sqrt', 'log2', None],
+        'bootstrap': [True, False],
+    }
+    rf = RandomForestClassifier(random_state=42)
+    random_search = RandomizedSearchCV(
+        estimator=rf,
+        param_distributions=param_dist,
+        n_iter=10,
+        cv=5,
+        scoring='roc_auc',
+        random_state=42,
+        n_jobs=-1
+    )
+    random_search.fit(X_train, y_train)
+    return random_search.best_estimator_, random_search.best_params_
+
+def tune_rf(X_train, y_train):
+    param_dist = {
+        'n_estimators': [100, 200, 300],
+        'max_depth': [None, 10, 20, 30],
+        'min_samples_split': [2, 5, 10],
+        'min_samples_leaf': [1, 2, 4],
+        'max_features': ['sqrt', 'log2', None],
+        'bootstrap': [True, False],
+    }
+    rf = RandomForestClassifier(random_state=42)
+    random_search = RandomizedSearchCV(
+        estimator=rf,
+        param_distributions=param_dist,
+        n_iter=10,
+        cv=5,
+        scoring='roc_auc',
+        random_state=42,
+        n_jobs=-1
+    )
+    random_search.fit(X_train, y_train)
+    return random_search.best_estimator_, random_search.best_params_
 
 def run_rf_pipeline(csv_file, label=''):
-    print(f"\n========== Running Random Forest Model on: {label} ==========\n")
+    print(f"========= Running Tuned Random Forest Model on: {label} ==========")
     data = pd.read_csv(csv_file)
 
     data = data.dropna(subset=['RV Dysfunction'])
@@ -527,14 +578,43 @@ def run_rf_pipeline(csv_file, label=''):
 
     X_train, X_test, y_train, y_test = train_test_split(X_scaled, Y_encoded, test_size=0.2, random_state=42)
 
-    rf_model = RandomForestClassifier(random_state=42)
-    trained_model = train_and_evaluate(rf_model, f"{label} - Random Forest", X_train, y_train, X_test, y_test)
+    # Use all features (no selection)
+    selected_features = X.columns.tolist()
+    X_train_selected = X_train
+    X_test_selected = X_test
 
-    fpr, tpr, auc = get_roc_data(rf_model, X_train, y_train, X_test, y_test)
+    # Tune Random Forest using existing function
+    best_model, best_params = tune_hyperparameters_with_feature_selection(
+        X_train_selected, y_train, selected_features
+    )
+
+    print(f"Best RF Params for {label}:", best_params)
+
+    trained_model = train_and_evaluate(best_model, f"{label} - Tuned Random Forest", 
+                                       X_train_selected, y_train, X_test_selected, y_test)
+
+    # Plot feature importance
+    importances = trained_model.feature_importances_
+    importance_df = pd.DataFrame({
+        'Feature': selected_features,
+        'Importance': importances
+    }).sort_values(by='Importance', ascending=False)
+
+    print(f"\nTop Features for {label}:\n", importance_df.head(10))
+
+    plt.figure(figsize=(12, 8))
+    sns.barplot(x='Importance', y='Feature', data=importance_df.head(10), palette='plasma')
+    plt.title(f"Feature Importance - Random Forest ({label})")
+    plt.xlabel("Importance Score")
+    plt.tight_layout()
+    plt.show()
+
+    # Return ROC data
+    fpr, tpr, auc = get_roc_data(best_model, X_train_selected, y_train, X_test_selected, y_test)
     return label, fpr, tpr, auc
 
 
-# In[314]:
+# In[ ]:
 
 
 rf_results = [
