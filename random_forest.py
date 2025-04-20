@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[79]:
+# In[1]:
 
 
 import pandas as pd
@@ -14,29 +14,33 @@ from sklearn.preprocessing import StandardScaler, LabelEncoder
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_selection import SelectFromModel
+import pandas as pd
 
 
-# In[ ]:
+# In[2]:
 
 
 # Load data
-data = pd.read_csv('patients_data_with_RVoutcomes.csv')
+data = pd.read_csv('Close2AdmitDataWithRV.csv')
 
 # Clean data
-data = data.dropna(subset=['Birthday', 'RV Dysfunction'])
+data = data.dropna(subset=['RV Dysfunction'])
 data = data[data['RV Dysfunction'] != '0']
 
-# Select features
-columns_to_exclude = ['patid', 'patkey', 'rhcId','RHCDate', 'TTEDate', 'AVr_str', 'PVr_str', 'TVr_str', 'MVr_str']
-data = data.drop(columns=columns_to_exclude)
+''' Select features
+columns_to_exclude = ['patid', 'patkey', 'TTEDate', 'AVr_str', 'PVr_str', 'TVr_str', 'MVr_str']
+'''
 
 
-# In[ ]:
+# In[3]:
 
+
+import numpy as np
+import pandas as pd
 
 def calculate_cardiac_indices(df):
     """
-    Calculate cardiac indices based on available variables according to the provided formula sheet
+    Calculate cardiac indices based on available variables according to the provided formula sheet.
     
     Parameters:
     df (pandas.DataFrame): Input dataframe with RHC and TTE variables
@@ -44,52 +48,46 @@ def calculate_cardiac_indices(df):
     Returns:
     pandas.DataFrame: Dataframe with additional cardiac indices columns
     """
-    # Calculate mean blood pressure using proper formula from image
-    # Formula shows: mean_BP = 2/3(AD) + 1/3(AS) or 2/3(NIBPd) + 1/3(NIBPs)
-    df['mean_BP'] = (2/3 * df['NIBPd_vitals']) + (1/3 * df['NIBPs_vitals'])
-    
-    # Estimate Body Surface Area (BSA) using DuBois formula as shown in image
-    # BSA = 0.007184 * (weight)^0.425 * (height)^0.725
-    df['BSA'] = 0.007184 * (df['Weight'] ** 0.425) * (df['Height'] ** 0.725)
-    
-    # LVEDV calculation with pi
-    df['LVEDV'] = (4/3) * np.pi * (df['LVIDd']/2)**3
-    
+    # Convert LVIDd from mm to mL (assuming LVIDd is in mm, convert to cm, then use volume formula)
+    df['LVIDd_cm'] = df['LVIDd'] / 10  # Convert mm to cm
+    df['LVEDV'] = (4/3) * np.pi * (df['LVIDd_cm']/2) ** 3  # Volume calculation
+
+    # Convert LVEF from percentage to fraction
+    df['LVEF_tte'] = df['LVEF_tte'] * 0.01  
+
     # Calculate Left Ventricle Stroke Volume
-    df['LVSV'] = df['LVEDV'] * df['LVEF_tte'] / 100
-    
-    # 1. Left Ventricle Stroke Work Index (LVSWI)
-    # LVSWI = LVSV * (mean_BP - LAP) * 0.0136 / BSA, where LAP = PCW
+    df['LVSV'] = df['LVEDV'] * df['LVEF_tte']
+
+    # Mean Blood Pressure calculation
+    df['mean_BP'] = (2/3 * df['NIBPd_vitals']) + (1/3 * df['NIBPs_vitals'])
+
+    # Estimate Body Surface Area (BSA) using DuBois formula
+    df['BSA'] = 0.007184 * (df['Weight'] ** 0.425) * (df['Height'] ** 0.725)
+
+    # Left Ventricle Stroke Work Index (LVSWI)
     df['LVSWI'] = df['LVSV'] * (df['mean_BP'] - df['PCW']) * 0.0136 / df['BSA']
-    
-    # 2. Right Ventricle Stroke Work Index (RVSWI)
-    # RVSWI = RVSV * (mPAP - mRAP) * 0.0136 / BSA
-    # Where RVSV = LVSV, mPAP = 2/3(PAd) + 1/3(PAs), mRAP = RAm
-    # Using LVSV for RVSV as specified
+
+    # Right Ventricle Stroke Work Index (RVSWI)
+    df['PAm'] = (df['PAs'] + 2 * df['PAd']) / 3
     df['RVSWI'] = df['LVSV'] * (df['PAm'] - df['RAm']) * 0.0136 / df['BSA']
-    
-    # 3. LV Stiffness = σ/ε
-    # σ = PCW * (LVIDd/2) / (2 * IVSD)
-    df['stress'] = df['PCW'] * (df['LVIDd']/2) / (2 * df['IVSd'])
-    
-    # ε = (LVIDd - LVIDs) / LVIDs
-    df['strain'] = (df['LVIDd'] - df['LVIDs']) / df['LVIDs']
-    
+
     # LV Stiffness = stress / strain
+    df['stress'] = df['PCW'] * (df['LVIDd_cm']/2) / (2 * df['IVSd'])
+    df['strain'] = (df['LVIDd_cm'] - df['LVIDs']) / df['LVIDs']
     df['LV_stiffness'] = df['stress'] / df['strain']
-    
-    # 4. Passive Cardiac Index = RAP * CO / (LVEDP * BSA)
-    # Where LVEDP = PCW
+
+    # Passive Cardiac Index = RAP * CO / (LVEDP * BSA), where LVEDP = PCW
     df['Passive_Cardiac_Index'] = df['RAm'] * df['CO_fick'] / (df['PCW'] * df['BSA'])
-    
+
     return df
 
 
-# In[ ]:
+# In[4]:
 
 
 missing_percentages = data.isnull().mean() * 100
-
+data = calculate_cardiac_indices(data)
+#data = data.drop(columns=columns_to_exclude)
 # Identify columns with more than 20% missing data
 columns_to_drop = missing_percentages[missing_percentages > 20].index
 
@@ -100,7 +98,7 @@ data = data.drop(columns=columns_to_drop)
 print(f"Columns dropped: {columns_to_drop.tolist()}")
 
 
-# In[ ]:
+# In[5]:
 
 
 #drop patients where more than 20% missing
@@ -113,7 +111,7 @@ df_cleaned = data[missing_percentage <= 0.2]
 data = df_cleaned.reset_index(drop=True)
 
 
-# In[ ]:
+# In[6]:
 
 
 # Convert 'Birthday' to Age
@@ -128,9 +126,23 @@ data = data.drop(columns=['Birthday'], errors='ignore')
 
 # Select numerical features for X
 X = data.select_dtypes(include=[np.number]).drop(columns=['RV Dysfunction'], errors='ignore')
+print(X.head())
 
 
-# In[ ]:
+# In[7]:
+
+
+# Pretty display all numerical features (first 5 rows)
+pd.set_option('display.max_columns', None)  # Show all columns
+pd.set_option('display.precision', 2)       # Set decimal precision
+X.head().style.set_caption("All Engineered Features (Sample)")\
+    .set_table_styles([
+        {'selector': 'th', 'props': [('font-size', '12pt')]},
+        {'selector': 'td', 'props': [('font-size', '11pt')]}
+    ])
+
+
+# In[8]:
 
 
 from sklearn.impute import KNNImputer
@@ -154,7 +166,7 @@ scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X)
 
 
-# In[ ]:
+# In[9]:
 
 
 # Encode target variable into binary labels
@@ -176,20 +188,25 @@ X_scaled = scaler.fit_transform(X)
 X_train, X_test, y_train, y_test = train_test_split(X_scaled, Y_encoded, test_size=0.2, random_state=42)
 
 
-# In[ ]:
+# In[10]:
 
 
 print("Class distribution:", np.bincount(y_train))
 print("Classes",np.unique(Y) )
 
 
-# In[ ]:
+# In[11]:
 
+
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score, roc_curve
 
 def train_and_evaluate(model, model_name, X_train, Y_train, X_test, Y_test):
     """
     Trains and evaluates a classification model.
-    Prints classification report, confusion matrix, and calculates ROC AUC.
+    Displays classification report as a table, confusion matrix as a heatmap, and calculates ROC AUC.
     """
     print(f"\n--- {model_name} ---")
 
@@ -199,30 +216,44 @@ def train_and_evaluate(model, model_name, X_train, Y_train, X_test, Y_test):
     # Make predictions
     Y_pred = model.predict(X_test)
 
-    # Print classification report
-    print("\nClassification Report:")
-    print(classification_report(Y_test, Y_pred))
+    # Generate classification report dictionary
+    report = classification_report(Y_test, Y_pred, output_dict=True)
 
-    # Print confusion matrix
+    # Convert report to DataFrame
+    report_df = pd.DataFrame(report).transpose()
+
+    # Display classification report as a table
+    print("\nClassification Report:")
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.axis("tight")
+    ax.axis("off")
+    table = ax.table(cellText=report_df.round(2).values, 
+                     colLabels=report_df.columns, 
+                     rowLabels=report_df.index, 
+                     cellLoc="center", 
+                     loc="center")
+    plt.show()
+
+    # Print and plot confusion matrix
     print("\nConfusion Matrix:")
     cm = confusion_matrix(Y_test, Y_pred)
-    cm_df = pd.DataFrame(cm)
-    plt.figure(figsize=(8,6))
-    sns.heatmap(cm_df, annot=True, fmt='d', cmap='YlGnBu')
+    cm_df = pd.DataFrame(cm, index=["Actual 0", "Actual 1"], columns=["Predicted 0", "Predicted 1"])
+    
+    plt.figure(figsize=(6, 5))
+    sns.heatmap(cm_df, annot=True, fmt='d', cmap='YlGnBu', linewidths=0.5)
     plt.title(f"Confusion Matrix - {model_name}")
     plt.ylabel('Actual')
     plt.xlabel('Predicted')
     plt.show()
 
-    # Calculate ROC AUC
-    if hasattr(model, "predict_proba"):  # Ensure the model supports probability predictions
-        Y_pred_proba = model.predict_proba(X_test)[:, 1]  # Probability of class 1
+    # Calculate and plot ROC AUC if applicable
+    if hasattr(model, "predict_proba"):
+        Y_pred_proba = model.predict_proba(X_test)[:, 1]
         roc_auc = roc_auc_score(Y_test, Y_pred_proba)
 
         print(f"ROC AUC: {roc_auc:.4f}")
 
-        # Plot ROC Curve
-        fpr, tpr, thresholds = roc_curve(Y_test, Y_pred_proba)
+        fpr, tpr, _ = roc_curve(Y_test, Y_pred_proba)
         plt.figure(figsize=(8, 6))
         plt.plot(fpr, tpr, label=f'{model_name} (AUC = {roc_auc:.2f})')
         plt.plot([0, 1], [0, 1], 'k--')
@@ -235,16 +266,18 @@ def train_and_evaluate(model, model_name, X_train, Y_train, X_test, Y_test):
     return model
 
 
-# In[ ]:
+# In[12]:
 
 
-def tune_hyperparameters(X_train, y_train, n_iter=20, cv=5, random_state=42):
+def tune_hyperparameters_with_feature_selection(X_train, y_train, selected_features, n_iter=20, cv=5, random_state=42):
     """
-    Tunes hyperparameters for a Random Forest classifier using RandomizedSearchCV.
+    Tunes hyperparameters for a Random Forest classifier using RandomizedSearchCV,
+    using only the selected features from feature selection.
     
     Parameters:
     - X_train: Training feature matrix.
     - y_train: Training labels.
+    - selected_features: List of column names for selected features.
     - n_iter: Number of random parameter sets to try (default: 20).
     - cv: Number of cross-validation folds (default: 5).
     - random_state: Random seed for reproducibility (default: 42).
@@ -256,14 +289,13 @@ def tune_hyperparameters(X_train, y_train, n_iter=20, cv=5, random_state=42):
     
     # Define the hyperparameter search space
     param_dist = {
-    'n_estimators': [100, 200, 300, 400, 500],
-    'max_depth': [None, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100],
-    'min_samples_split': [2, 3, 5, 7, 10, 15, 20],
-    'min_samples_leaf': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-    'max_features': [None, 'sqrt', "log2"],
-    'bootstrap': [True, False],
+        'n_estimators': [100, 200, 300, 400, 500],
+        'max_depth': [None, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100],
+        'min_samples_split': [2, 3, 5, 7, 10, 15, 20],
+        'min_samples_leaf': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+        'max_features': [None, 'sqrt', 'log2'],
+        'bootstrap': [True, False],
     }
-
     
     # Initialize the Random Forest classifier
     rf = RandomForestClassifier(random_state=random_state)
@@ -280,7 +312,8 @@ def tune_hyperparameters(X_train, y_train, n_iter=20, cv=5, random_state=42):
         error_score='raise'
     )
     
-    # Fit the model
+    # Fit the model using only the selected features
+    # Note: X_train should already be transformed using the selector
     random_search.fit(X_train, y_train)
     
     # Extract the best model and parameters
@@ -290,13 +323,7 @@ def tune_hyperparameters(X_train, y_train, n_iter=20, cv=5, random_state=42):
     return best_model, best_params
 
 
-# In[ ]:
-
-
-
-
-
-# In[81]:
+# In[13]:
 
 
 # Train a Random Forest model to get feature importances
@@ -310,26 +337,28 @@ selector = SelectFromModel(initial_rf, threshold="mean", prefit=True)
 X_train_selected = selector.transform(X_train)
 X_test_selected = selector.transform(X_test)
 
-# Get the selected feature names using get_support() instead
+# Get the selected feature names using get_support()
 selected_indices = selector.get_support()
 selected_features = [feature_names[i] for i in range(len(feature_names)) if selected_indices[i]]
 
-# Print the selected feature names
+# Print the actual selected feature names
 print("Selected Features:", selected_features)
 
 
-# In[ ]:
+# In[14]:
 
 
 rf_selected = RandomForestClassifier(random_state=42)
-default_model = train_and_evaluate(rf_selected, "Random Forest with Feature Selection", X_train_selected, y_train, X_test_selected, y_test)
+default_model = train_and_evaluate(rf_selected, "Random Forest with Feature Selection", 
+                                  X_train_selected, y_train, X_test_selected, y_test)
 
 
-# In[ ]:
+# In[15]:
 
 
-# Tune hyperparameters for the Random Forest model
-best_model, best_params = tune_hyperparameters(X_train_selected, y_train)
+# Tune hyperparameters on the selected features
+best_model, best_params = tune_hyperparameters_with_feature_selection(
+    X_train_selected, y_train, selected_features)
 
 # Print the best hyperparameters
 print("Best Hyperparameters:")
@@ -337,23 +366,15 @@ for param, value in best_params.items():
     print(f"{param}: {value}")
 
 
-# In[ ]:
+# In[16]:
 
 
-# Train and evaluate the Random Forest model with tuned hyperparameters
-tuned_model = train_and_evaluate(best_model, "Tuned Random Forest", X_train_selected, y_train, X_test_selected, y_test)
+# Train and evaluate the Random Forest model with tuned hyperparameters on selected features
+tuned_model = train_and_evaluate(best_model, "Tuned Random Forest with Feature Selection", 
+                               X_train_selected, y_train, X_test_selected, y_test)
 
 
-# In[ ]:
-
-
-selected_feature_names = [feature_names[i] for i in selected_features]
-
-# Print the selected feature names
-print("Selected Feature Names:", selected_feature_names)
-
-
-# In[ ]:
+# In[17]:
 
 
 def plot_feature_importance(model, feature_names, title="Feature Importance", top_n=20, top_n_true=False):
@@ -365,13 +386,14 @@ def plot_feature_importance(model, feature_names, title="Feature Importance", to
     - feature_names: List of feature names
     - title: Plot title
     - top_n: Number of top features to display
+    - top_n_true: Whether to display only top_n features
     """
     # Get feature importance from the model
     importances = model.feature_importances_
     
     # Create a DataFrame for better visualization
     feature_importance_df = pd.DataFrame({
-        'Feature': feature_names,
+        'Feature': feature_names,  # These should already be actual feature names
         'Importance': importances
     }).sort_values('Importance', ascending=False)
     
@@ -395,26 +417,25 @@ def plot_feature_importance(model, feature_names, title="Feature Importance", to
     return feature_importance_df
 
 
-# In[ ]:
+# In[18]:
 
 
+# Plot feature importance for both models
 print("\nFeature Importance for Default Random Forest:")
-importance_df_default = plot_feature_importance(default_model, selected_features, "Default Random Forest Feature Importance", False)
+importance_df_default = plot_feature_importance(default_model, selected_features, 
+                                              "Default Random Forest Feature Importance")
 
-# After training the tuned model
 print("\nFeature Importance for Tuned Random Forest:")
-importance_df_tuned = plot_feature_importance(best_model, selected_features, "Tuned Random Forest Feature Importance", False) 
+importance_df_tuned = plot_feature_importance(tuned_model, selected_features, 
+                                            "Tuned Random Forest Feature Importance")
 
-
-# In[ ]:
-
-
-print("\nFeature Importance for Default Random Forest:")
-importance_df_default = plot_feature_importance(default_model, selected_features, "Default Random Forest Top 20 Feature Importance", 20, True)
-
-# After training the tuned model
-print("\nFeature Importance for Tuned Random Forest:")
-importance_df_tuned = plot_feature_importance(best_model, selected_features, "Tuned Random Forest Top 20 Feature Importance",20, True) 
+# For top 20 features
+print("\nFeature Importance for Default Random Forest (Top 10):")
+importance_df_default = plot_feature_importance(default_model, selected_features, 
+                                             "Default Random Forest Top 10 Feature Importance", 10, True)
+print("\nFeature Importance for Tuned Random Forest (Top 10):")
+importance_df_tuned = plot_feature_importance(tuned_model, selected_features, 
+                                           "Tuned Random Forest Top 10 Feature Importance", 10, True)
 
 
 # In[ ]:

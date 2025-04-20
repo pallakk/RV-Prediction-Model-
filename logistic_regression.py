@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[17]:
+# In[2]:
 
 
 import pandas as pd
@@ -16,26 +16,78 @@ from sklearn.impute import KNNImputer
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, roc_auc_score, roc_curve
 
 
-# In[8]:
+
+# In[12]:
 
 
 # Load data
-data = pd.read_csv('patients_data_with_RVoutcomes.csv')
+data = pd.read_csv('Close2AdmitDataWithRV.csv')
 
 # Clean data
-data = data.dropna(subset=['Birthday', 'RV Dysfunction'])
+data = data.dropna(subset=['RV Dysfunction'])
 data = data[data['RV Dysfunction'] != '0']
 
-# Select features
-columns_to_exclude = ['patid', 'patkey', 'rhcId','RHCDate', 'TTEDate', 'AVr_str', 'PVr_str', 'TVr_str', 'MVr_str']
-data = data.drop(columns=columns_to_exclude)
+''' Select features
+columns_to_exclude = ['patid', 'patkey', 'TTEDate', 'AVr_str', 'PVr_str', 'TVr_str', 'MVr_str']
+'''
 
 
-# In[9]:
+# In[6]:
+
+
+import numpy as np
+import pandas as pd
+
+def calculate_cardiac_indices(df):
+    """
+    Calculate cardiac indices based on available variables according to the provided formula sheet.
+    
+    Parameters:
+    df (pandas.DataFrame): Input dataframe with RHC and TTE variables
+    
+    Returns:
+    pandas.DataFrame: Dataframe with additional cardiac indices columns
+    """
+    # Convert LVIDd from mm to mL (assuming LVIDd is in mm, convert to cm, then use volume formula)
+    df['LVIDd_cm'] = df['LVIDd'] / 10  # Convert mm to cm
+    df['LVEDV'] = (4/3) * np.pi * (df['LVIDd_cm']/2) ** 3  # Volume calculation
+
+    # Convert LVEF from percentage to fraction
+    df['LVEF_tte'] = df['LVEF_tte'] * 0.01  
+
+    # Calculate Left Ventricle Stroke Volume
+    df['LVSV'] = df['LVEDV'] * df['LVEF_tte']
+
+    # Mean Blood Pressure calculation
+    df['mean_BP'] = (2/3 * df['NIBPd_vitals']) + (1/3 * df['NIBPs_vitals'])
+
+    # Estimate Body Surface Area (BSA) using DuBois formula
+    df['BSA'] = 0.007184 * (df['Weight'] ** 0.425) * (df['Height'] ** 0.725)
+
+    # Left Ventricle Stroke Work Index (LVSWI)
+    df['LVSWI'] = df['LVSV'] * (df['mean_BP'] - df['PCW']) * 0.0136 / df['BSA']
+
+    # Right Ventricle Stroke Work Index (RVSWI)
+    df['PAm'] = (df['PAs'] + 2 * df['PAd']) / 3
+    df['RVSWI'] = df['LVSV'] * (df['PAm'] - df['RAm']) * 0.0136 / df['BSA']
+
+    # LV Stiffness = stress / strain
+    df['stress'] = df['PCW'] * (df['LVIDd_cm']/2) / (2 * df['IVSd'])
+    df['strain'] = (df['LVIDd_cm'] - df['LVIDs']) / df['LVIDs']
+    df['LV_stiffness'] = df['stress'] / df['strain']
+
+    # Passive Cardiac Index = RAP * CO / (LVEDP * BSA), where LVEDP = PCW
+    df['Passive_Cardiac_Index'] = df['RAm'] * df['CO_fick'] / (df['PCW'] * df['BSA'])
+
+    return df
+
+
+# In[15]:
 
 
 missing_percentages = data.isnull().mean() * 100
-
+data = calculate_cardiac_indices(data)
+#data = data.drop(columns=columns_to_exclude)
 # Identify columns with more than 20% missing data
 columns_to_drop = missing_percentages[missing_percentages > 20].index
 
@@ -46,7 +98,7 @@ data = data.drop(columns=columns_to_drop)
 print(f"Columns dropped: {columns_to_drop.tolist()}")
 
 
-# In[10]:
+# In[16]:
 
 
 #drop patients where more than 20% missing
@@ -59,7 +111,7 @@ df_cleaned = data[missing_percentage <= 0.2]
 data = df_cleaned.reset_index(drop=True)
 
 
-# In[11]:
+# In[17]:
 
 
 # Convert 'Birthday' to Age
@@ -74,14 +126,17 @@ data = data.drop(columns=['Birthday'], errors='ignore')
 
 # Select numerical features for X
 X = data.select_dtypes(include=[np.number]).drop(columns=['RV Dysfunction'], errors='ignore')
+#print(X.head())
 
 
-# In[12]:
+# In[18]:
 
 
 from sklearn.impute import KNNImputer
 # Initialize the KNN imputer
 # You can adjust n_neighbors as needed
+X = X.replace([np.inf, -np.inf], np.nan)
+
 knn_imputer = KNNImputer(n_neighbors=5)
 
 # Get the feature names for later use
@@ -98,7 +153,7 @@ scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X)
 
 
-# In[14]:
+# In[19]:
 
 
 # Encode target variable into binary labels
@@ -120,14 +175,14 @@ X_scaled = scaler.fit_transform(X)
 X_train, X_test, y_train, y_test = train_test_split(X_scaled, Y_encoded, test_size=0.2, random_state=42)
 
 
-# In[15]:
+# In[20]:
 
 
 print("Class distribution:", np.bincount(y_train))
 print("Classes",np.unique(Y) )
 
 
-# In[16]:
+# In[21]:
 
 
 def train_and_evaluate(model, model_name, X_train, Y_train, X_test, Y_test):
@@ -177,4 +232,47 @@ def train_and_evaluate(model, model_name, X_train, Y_train, X_test, Y_test):
         plt.show()
     
     return model
+
+
+# In[22]:
+
+
+logistic_model = LogisticRegression(
+    random_state=42,  # For reproducibility
+    max_iter=1000,    # Increase max iterations to ensure convergence
+    class_weight='balanced'  # Handle class imbalance
+)
+
+# Train and evaluate Logistic Regression
+logistic_regression_model = train_and_evaluate(
+    logistic_model, 
+    "Logistic Regression", 
+    X_train, 
+    y_train, 
+    X_test, 
+    y_test
+)
+
+# Optional: Perform cross-validation
+cv_scores = cross_val_score(logistic_model, X_scaled, Y_encoded, cv=StratifiedKFold(n_splits=5, shuffle=True, random_state=42))
+print("\nCross-Validation Scores:", cv_scores)
+print("Mean CV Score:", cv_scores.mean())
+print("Standard Deviation of CV Scores:", cv_scores.std())
+
+# Optional: Feature importance (coefficients)
+feature_importance = pd.DataFrame({
+    'feature': feature_names,
+    'importance': np.abs(logistic_regression_model.coef_[0])
+})
+feature_importance = feature_importance.sort_values('importance', ascending=False)
+print("\nTop 10 Most Important Features:")
+print(feature_importance.head(20))
+
+# Visualize feature importance
+plt.figure(figsize=(10, 6))
+sns.barplot(x='importance', y='feature', data=feature_importance.head(20), palette='viridis')
+plt.title('Top 10 Most Important Features - Logistic Regression')
+plt.xlabel('Absolute Coefficient Magnitude')
+plt.tight_layout()
+plt.show()
 
